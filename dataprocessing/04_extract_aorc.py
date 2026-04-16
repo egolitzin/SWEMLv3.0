@@ -60,7 +60,11 @@ def add_snow_rain(ds: xr.Dataset) -> xr.Dataset:
           + 0.00391838 * RH ** 1.5 * np.arctan(0.023101 * RH)
           - 4.686035)
 
-    P_snow = ((T_ALL_RAIN - Tw) / (T_ALL_RAIN - T_ALL_SNOW)).clip(0.0, 1.0)
+    a = 6.99e-5         # dimensionless
+    b = 2.0             # K^-1
+    c = 3.97            # K
+    P_snow = 1.0 / (1.0 + a*np.exp(b*(Tw + c)))
+
     ds['SNOW_wetbulb'] = ds['APCP_surface'] * P_snow
     ds['RAIN_wetbulb'] = ds['APCP_surface'] * (1.0 - P_snow)
     return ds
@@ -121,8 +125,8 @@ def zonal_means(data: np.ndarray, S: csr_matrix) -> np.ndarray:
 
 def load_aorc_year(year: int, bbox: tuple, s3: s3fs.S3FileSystem) -> xr.Dataset:
     """
-    Stream one calendar year of AORC from S3, clip to bbox, aggregate to daily,
-    add snow/rain partition, and load into memory.
+    Stream one calendar year of AORC from S3, clip to bbox, compute hourly snow/rain
+    phase partition, aggregate to daily, and load into memory.
     """
     lon_min, lat_min, lon_max, lat_max = bbox
     store = s3fs.S3Map(root=f'{AORC_S3_BUCKET}/{year}.zarr', s3=s3, check=False)
@@ -131,11 +135,11 @@ def load_aorc_year(year: int, bbox: tuple, s3: s3fs.S3FileSystem) -> xr.Dataset:
         latitude=slice(lat_min, lat_max),
         longitude=slice(lon_min, lon_max),
     )
+    ds = add_snow_rain(ds)   # phase partition at hourly resolution before aggregating
     ds_daily = xr.merge([
-        ds[SUM_VARS].resample(time='1D').sum(min_count=1),
+        ds[SUM_VARS + ['SNOW_wetbulb', 'RAIN_wetbulb']].resample(time='1D').sum(min_count=1),
         ds[MEAN_VARS].resample(time='1D').mean(),
     ])
-    ds_daily = add_snow_rain(ds_daily)
     print(f'    Loading {year} into memory...')
     return ds_daily.load()
 

@@ -47,10 +47,11 @@ def latlon_to_lcc(lat2d: np.ndarray, lon2d: np.ndarray):
     mid_col = y2d.shape[1] // 2
     x_1d = x2d[mid_row, :]    # x values along middle row
     y_1d = y2d[:, mid_col]    # y values along middle column
-    # ensure ascending y (S-to-N); x should already be ascending (W-to-E) for western US
-    if y_1d[0] > y_1d[-1]:
+    # ensure ascending y (S-to-N); track whether a flip was needed
+    y_flipped = y_1d[0] > y_1d[-1]
+    if y_flipped:
         y_1d = y_1d[::-1]
-    return x_1d, y_1d
+    return x_1d, y_1d, y_flipped
 
 
 def build_weight_matrix(hrus: gpd.GeoDataFrame,
@@ -173,7 +174,7 @@ def main():
 
         if S is None:
             print('  Converting HRRR grid to LCC and computing coverage weights...')
-            x_1d, y_1d = latlon_to_lcc(lat2d_clip, lon2d_clip)
+            x_1d, y_1d, y_flipped = latlon_to_lcc(lat2d_clip, lon2d_clip)
             S, hru_ids = build_weight_matrix(hrus, x_1d, y_1d)
 
         times.append(ds.time.values)
@@ -181,8 +182,8 @@ def main():
             if var not in ds:
                 continue
             data = ds[var].values.astype(np.float32)  # (n_time, n_y, n_x)
-            # HRRR NetCDF is stored N-to-S (row 0 = north); flip to S-to-N
-            data = data[:, ::-1, :]
+            if y_flipped:
+                data = data[:, ::-1, :]
             accum[var].append(zonal_means(data, S))
 
         ds.close()
