@@ -1,0 +1,62 @@
+name: sweml_v3
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+
+dependencies:
+  - python=3.11
+
+  # geospatial core
+  - geopandas
+  - rasterio
+  - rioxarray
+  - shapely
+  - pyproj
+  - fiona
+  - rtree             # spatial indexing for geopandas sjoin
+  - contextily
+
+  # array / data
+  - numpy
+  - pandas
+  - xarray
+  - zarr
+  - dask
+  - bottleneck        # fast xarray reductions
+  - scipy
+
+  # I/O backends
+  - netcdf4
+  - h5netcdf
+  - pyarrow           # parquet
+
+  # remote data access
+  - earthaccess       # NASA Earthdata (MODIS, NSIDC)
+  - s3fs
+  - fsspec
+  - aiohttp
+  - requests
+
+  # hydrology data services (HyRiver suite)
+  - py3dep            # USGS 3DEP DEM
+  - pygeohydro        # NLCD land cover
+  - pynhd             # WBD HUC8 subsetting
+
+  # zonal statistics
+  - exactextract
+
+  # deep learning
+  - pytorch::pytorch
+  - pytorch::torchvision
+
+  # utilities
+  - tqdm
+  - matplotlib
+  - jupyter
+  - ipykernel
+
+  # pip-only packages
+  - pip
+  - pip:
+    - neuralhydrology  # https://github.com/neuralhydrology/neuralhydrology

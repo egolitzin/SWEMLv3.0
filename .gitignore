@@ -1,1 +1,10 @@
 *.png
+*.job
+slurm*
+*token
+__pycache__/
+domains/model_domain_*/
+models/*
+cache/
+
+*sandbox.ipynb

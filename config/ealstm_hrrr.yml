@@ -1,0 +1,88 @@
+## EA-LSTM trained on HRRR 3km daily forcings (operational target model)
+## Run: nh_run config/ealstm_hrrr.yml
+
+experiment_name: ealstm_hrrr
+run_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/models/
+
+# --- data ---
+dataset: generic
+data_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/
+train_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
+validation_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
+test_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
+
+# --- periods ---
+train_start_date: '01/10/2014'
+train_end_date:   '30/09/2019'
+validation_start_date: '01/10/2019'
+validation_end_date:   '30/09/2020'
+test_start_date: '01/10/2020'
+test_end_date:   '30/09/2021'
+
+# --- inputs / outputs ---
+dynamic_inputs:
+  - tp            # total precip (m)
+  - t2m           # 2m air temp (K)
+  - d2m           # 2m dewpoint (K)
+  - sh2           # specific humidity (kg/kg)
+  - sp            # surface pressure (Pa)
+  - t_sfc         # skin temperature (K)
+  - snow_wetbulb  # snow fraction by wet-bulb ramp (Stull 2011)
+  - rain_wetbulb  # rain fraction by wet-bulb ramp (Stull 2011)
+  - frac_frozen   # frozen precip fraction (Jennings 2018 bivariate)
+
+static_attributes:
+  - elev_mean
+  - elev_std
+  - elev_min
+  - elev_max
+  - elev_p25
+  - elev_p75
+  - slope_mean
+  - aspect_sin
+  - aspect_cos
+  - forest_fraction
+  - sturm_ephemeral
+  - sturm_maritime
+  - sturm_montane_forest
+  - sturm_prairie
+  - sturm_tundra
+  - canopy_ndvi
+  - areasqkm
+
+target_variables:
+  - swe
+
+# --- model ---
+model: ealstm
+head: regression
+hidden_size: 128
+initial_forget_bias: 3
+output_dropout: 0.4
+
+# --- training ---
+loss: NSE
+learning_rate: 0.001
+batch_size: 256
+optimizer: Adam
+epochs: 30
+seq_length: 90
+predict_last_n: 90
+clip_gradient_norm: 1.0
+
+# --- logging ---
+log_interval: 5
+log_tensorboard: True
+save_weights_every: 10
+log_n_figures: 5
+save_validation_results: true
+metrics:
+  - NSE
+  - MSE
+  - KGE
+  - Alpha-NSE
+  - Beta-NSE
+
+device: cuda:0
+num_workers: 8
+seed: 42
