@@ -71,9 +71,9 @@ except ImportError:
 
 short_name = "WUS_UCLA_SR"
 version = "1"
-time_start = "2013-10-01T06:00:00Z"
-time_end = "2014-09-30T23:59:59Z"
-# time_end = "2021-09-30T23:59:59Z"
+time_start = "2020-10-01T06:00:00Z"
+# time_end = "2013-09-30T23:59:59Z"
+time_end = "2021-09-30T23:59:59Z"
 bounding_box = ""
 polygon = ""
 filename_filter = "SWE"

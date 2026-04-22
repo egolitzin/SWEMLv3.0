@@ -7,6 +7,9 @@ run_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/models/
 # --- data ---
 dataset: generic
 data_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/
+custom_normalization:
+  swe:
+    centering: None
 train_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
 validation_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
 test_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_sierra_nevada/nh_inputs/hrrr/basins_all.txt
@@ -22,14 +25,16 @@ test_end_date:   '30/09/2021'
 # --- inputs / outputs ---
 dynamic_inputs:
   - tp            # total precip (m)
-  - t2m           # 2m air temp (K)
+  - t2m           # 2m air temp daily mean (K)
+  - t2m_min       # 2m air temp daily minimum (K)
+  - t2m_max       # 2m air temp daily maximum (K)
   - d2m           # 2m dewpoint (K)
   - sh2           # specific humidity (kg/kg)
   - sp            # surface pressure (Pa)
   - t_sfc         # skin temperature (K)
-  - snow_wetbulb  # snow fraction by wet-bulb ramp (Stull 2011)
-  - rain_wetbulb  # rain fraction by wet-bulb ramp (Stull 2011)
-  - frac_frozen   # frozen precip fraction (Jennings 2018 bivariate)
+  - snow_wetbulb  # snow fraction by wet-bulb ramp (Stull 2011) 
+  - rain_wetbulb  # rain fraction by wet-bulb ramp (Stull 2011) 
+  - frac_frozen   # snow fraction by Jennings et al (2018) 
 
 static_attributes:
   - elev_mean
@@ -56,26 +61,33 @@ target_variables:
 # --- model ---
 model: ealstm
 head: regression
+output_activation: relu
 hidden_size: 128
 initial_forget_bias: 3
 output_dropout: 0.4
 
 # --- training ---
-loss: NSE
+loss: MSE
 learning_rate: 0.001
+#  0: 0.001
+#  10: 0.0005
+#  20: 0.0001
 batch_size: 256
 optimizer: Adam
 epochs: 30
-seq_length: 90
-predict_last_n: 90
+seq_length: 180
+predict_last_n: 1
+validate_every: 1
+validate_n_random_basins: 100
+cache_validation_data: true
 clip_gradient_norm: 1.0
 
 # --- logging ---
 log_interval: 5
 log_tensorboard: True
-save_weights_every: 10
+save_weights_every: 1
 log_n_figures: 5
-save_validation_results: true
+save_validation_results: True
 metrics:
   - NSE
   - MSE

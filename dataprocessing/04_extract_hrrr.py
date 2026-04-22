@@ -24,7 +24,7 @@ from domain_utils import domain_dir, load_hrus, domain_bbox, BASE_LOC
 
 HRRR_DIR  = BASE_LOC / 'HRRR'
 HRRR_VARS = [
-    'tp', 't2m', 'sh2', 'd2m', 't_sfc', 'sp', 'cpofp', 'frac_frozen',
+    'tp', 't2m', 't2m_min', 't2m_max', 'sh2', 'd2m', 't_sfc', 'sp', 'cpofp', 'frac_frozen',
     'snow_wetbulb', 'rain_wetbulb', 'snow_cpofp', 'rain_cpofp',
 ]
 

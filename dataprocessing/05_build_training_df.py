@@ -84,6 +84,9 @@ def build_timeseries(domain: str, forcings: list[str]) -> xr.Dataset:
     """
     Load and merge forcing zarrs + targets zarr into a single Dataset
     with dimensions (time, divide_id).
+    Inner join on time so each forcing's NetCDFs only span dates where
+    both forcing and targets are available. Train/val/test splits are
+    controlled entirely by the NeuralHydrology config dates.
     """
     d        = domain_dir(domain)
     datasets = []
@@ -101,7 +104,10 @@ def build_timeseries(domain: str, forcings: list[str]) -> xr.Dataset:
         raise FileNotFoundError('targets.zarr not found. Run 04_extract_targets.py first.')
     datasets.append(xr.open_zarr(target_path))
 
-    return xr.merge(datasets)
+    ds = xr.merge(datasets, join='inner')
+    t0, t1 = str(ds.time.values[0])[:10], str(ds.time.values[-1])[:10]
+    print(f'  Merged time range (inner join): {t0} to {t1}')
+    return ds
 
 
 def write_nh_inputs(domain: str, forcings: list[str], overwrite: bool = False) -> None:

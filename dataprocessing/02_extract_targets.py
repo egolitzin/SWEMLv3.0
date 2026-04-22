@@ -2,7 +2,7 @@
 Extract UCLA SWE posterior mean per HRU and save as zarr timeseries.
 
 Data source: WUS_UCLA_SR v01, ~500m resolution
-    Tiles: WUS_UCLA_SR_v01_N{lat}_0W{lon}_0_agg_16_WY{wy}_{yy}_SWE_SCA_POST.nc
+    Tiles: WUS_UCLA_SR_v01_N{lat}_0W{lon}_0_agg_16_WY{wy-1}_{yy}_SWE_SCA_POST.nc
     Dims: (Day:365, Stats:5, Longitude:225, Latitude:225)
     Stats=0: posterior mean SWE [mm]
     Latitude coordinate: N to S (e.g. 32.0 -> 31.0 for tile N31_0)
@@ -39,9 +39,7 @@ MIN_SNOW_DAYS = 7
 MIN_SNOW_WYS  = 1
 
 
-# ---------------------------------------------------------------------------
 # Tile utilities
-# ---------------------------------------------------------------------------
 
 def tile_name(lat_s: int, lon_w: int, wy: int) -> str:
     """Filename for tile covering water year wy.
@@ -57,7 +55,7 @@ def _parse_tile_coord(fname: str) -> tuple[int, int, int] | None:
     if not m:
         return None
     lat_s, lon_w = int(m.group(1)), int(m.group(2))
-    wy = int(m.group(3)[:2] + m.group(4))   # e.g. "20" + "15" -> 2015
+    wy = int(m.group(3)) + 1   # filename encodes wy-1 as 4-digit prefix
     return lat_s, lon_w, wy
 
 
@@ -107,9 +105,7 @@ def wy_dates(wy: int) -> pd.DatetimeIndex:
     return pd.date_range(pd.Timestamp(wy - 1, 10, 1), periods=365, freq='D')
 
 
-# ---------------------------------------------------------------------------
 # Mosaic grid and HRU rasterization
-# ---------------------------------------------------------------------------
 
 def mosaic_coords(lat_ss: list[int], lon_ws: list[int]) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -166,9 +162,7 @@ def rasterize_hrus(hrus, lat_coords: np.ndarray, lon_coords: np.ndarray
     return mask, hrus_4326['divide_id'].values
 
 
-# ---------------------------------------------------------------------------
 # Per-tile SWE extraction
-# ---------------------------------------------------------------------------
 
 def load_tile_swe(fpath: Path) -> np.ndarray:
     """
@@ -187,9 +181,7 @@ def load_tile_swe(fpath: Path) -> np.ndarray:
     return swe  # (365, PPD, PPD)
 
 
-# ---------------------------------------------------------------------------
 # Main extraction
-# ---------------------------------------------------------------------------
 
 def extract_swe(domain: str, wy_start: int, wy_end: int) -> xr.Dataset:
     hrus = load_initial_hrus(domain)
@@ -227,12 +219,28 @@ def extract_swe(domain: str, wy_start: int, wy_end: int) -> xr.Dataset:
     all_swe   = []
     all_dates = []
 
+    # Only warn about tiles that have HRU pixels AND exist in at least one WY
+    all_available = {(ls, lw) for (ls, lw, _) in _TILE_INDEX}
+    expected_grid = {
+        (ls, lw)
+        for ls in lat_ss for lw in lon_ws
+        if (ls, lw) in all_available
+        and (mask[lat_s_to_row[ls]:lat_s_to_row[ls] + PPD,
+                  lon_w_to_col[lw]:lon_w_to_col[lw] + PPD] > 0).any()
+    }
+
     for wy in range(wy_start, wy_end + 1):
         print(f'  WY{wy}...')
         tiles = tiles_for_bbox(bbox, wy)
         if not tiles:
             print(f'    No tiles found, skipping WY{wy}.')
             continue
+        found_grid = {(t[0], t[1]) for t in tiles}
+        missing_tiles = expected_grid - found_grid
+        if missing_tiles:
+            print(f'    WARNING: {len(missing_tiles)} expected tiles missing for WY{wy} '
+                  f'(HRUs in those cells will be NaN): '
+                  + ', '.join(f'N{ls}_W{lw}' for ls, lw in sorted(missing_tiles)))
 
         sums   = np.zeros((365, n_hrus), dtype=np.float64)
         counts = np.zeros((365, n_hrus), dtype=np.float64)
