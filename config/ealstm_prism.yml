@@ -1,0 +1,103 @@
+## EA-LSTM trained on PRISM 800m daily forcings (benchmark model)
+## Run: nh_run config/ealstm_prism.yml
+
+experiment_name: ealstm_prism_aso_2015
+run_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/models/
+
+# --- data ---
+dataset: generic
+data_dir: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_aso/nh_inputs/prism/
+custom_normalization:
+  swe:
+    centering: None
+train_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_aso/nh_inputs/prism/basins_all.txt
+validation_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_aso/nh_inputs/prism/basins_all.txt
+test_basin_file: /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/domains/model_domain_aso/nh_inputs/prism/basins_all.txt
+
+# --- periods ---
+train_start_date: '01/10/2014'
+train_end_date:   '30/09/2019'
+validation_start_date: '01/10/2019'
+validation_end_date:   '30/09/2020'
+test_start_date: '01/10/2020'
+test_end_date:   '30/09/2021'
+# train_start_date: '01/10/1999'
+# train_end_date:   '30/09/2012'
+# validation_start_date: '01/10/2012'
+# validation_end_date:   '30/09/2017'
+# test_start_date: '01/10/2017'
+# test_end_date:   '30/09/2021'
+
+# --- inputs / outputs ---
+dynamic_inputs:
+  - ppt
+  - tmean
+  - tmin
+  - tmax
+  - tdmean
+  - vpdmin
+  - vpdmax
+
+static_attributes:
+  - elev_mean
+  - elev_std
+  - elev_min
+  - elev_max
+  - elev_p25
+  - elev_p75
+  - slope_mean
+  - aspect_sin
+  - aspect_cos
+  - forest_fraction
+  # - sturm_boreal_forest
+  - sturm_ephemeral
+  - sturm_maritime
+  - sturm_montane_forest
+  - sturm_prairie
+  - sturm_tundra
+  - canopy_ndvi
+  - areasqkm
+
+target_variables:
+  - swe
+
+# --- model ---
+model: ealstm
+head: regression
+output_activation: relu
+hidden_size: 256
+initial_forget_bias: 3
+output_dropout: 0.2
+
+# --- training ---
+loss: MSE
+learning_rate: #0.001
+ 0: 0.001
+ 5: 0.0005
+ 10: 0.0001
+batch_size: 1024
+optimizer: Adam
+epochs: 25
+seq_length: 180
+predict_last_n: 180
+validate_every: 1
+validate_n_random_basins: 500
+cache_validation_data: true
+clip_gradient_norm: 1.0
+
+# --- logging ---
+log_interval: 5
+log_tensorboard: True
+save_weights_every: 1
+log_n_figures: 5
+save_validation_results: True
+metrics:
+  - NSE
+  - MSE
+  - KGE
+  - Alpha-NSE
+  - Beta-NSE
+
+device: cuda:0
+num_workers: 2
+seed: 42
