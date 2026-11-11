@@ -3,7 +3,7 @@ Extract HRRR daily forcings per HRU via area-weighted zonal means.
 
 Data source: base_loc/HRRR/HRRR_daily_WY{WY}.nc
     dims: (time, y, x), 2D latitude/longitude coords (Lambert Conformal grid)
-    variables: tp, t2m, sh2, d2m, t_sfc, sp, cpofp, frac_frozen,
+    variables: tp, t2m, t2m_min, t2m_max, sh2, d2m, t_sfc, sp, cpofp, Tw, frac_frozen,
                snow_wetbulb, rain_wetbulb, snow_cpofp, rain_cpofp
 
 Output: model_domain_{name}/hrrr.zarr  (time, divide_id)
@@ -24,8 +24,8 @@ from domain_utils import domain_dir, load_hrus, domain_bbox, BASE_LOC
 
 HRRR_DIR  = BASE_LOC / 'HRRR'
 HRRR_VARS = [
-    'tp', 't2m', 't2m_min', 't2m_max', 'sh2', 'd2m', 't_sfc', 'sp', 'cpofp', 'frac_frozen',
-    'snow_wetbulb', 'rain_wetbulb', 'snow_cpofp', 'rain_cpofp',
+    'tp', 't2m', 't2m_min', 't2m_max', 'sh2', 'd2m', 't_sfc', 'sp', 'cpofp',
+    'Tw', 'frac_frozen', 'snow_wetbulb', 'rain_wetbulb', 'snow_cpofp', 'rain_cpofp',
 ]
 
 # HRRR native Lambert Conformal Conic projection (NCEP spherical earth)

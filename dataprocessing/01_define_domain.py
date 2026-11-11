@@ -9,6 +9,7 @@ Usage:
     python 01_define_domain.py --domain sierra_nevada --huc8 18030012 18040008 18040009
     python 01_define_domain.py --domain wus --vpuid 10L 10U 11 13 14 15 16 17 18
     python 01_define_domain.py --domain sierra_nevada --bbox -121.5 36.0 -118.0 38.5 --overwrite
+    python 01_define_domain.py --domain ca_nv --bbox -124.0 32.5 -114.0 42.0
 """
 import argparse
 import numpy as np

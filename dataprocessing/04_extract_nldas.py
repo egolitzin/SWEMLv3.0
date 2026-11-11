@@ -20,6 +20,7 @@ Input variables (hourly):
 Daily aggregation: Rainf summed; Tair min/mean/max; all others mean.
 Phase partitioning is applied hourly before daily aggregation.
 Derived:
+    Tw           - wet-bulb temperature (K), Stull (2011) from hourly T + RH
     SNOW_wetbulb = Rainf * P_snow via Wang (2019) on Stull (2011) Tw
     RAIN_wetbulb = Rainf * (1 - P_snow)
 
@@ -127,7 +128,7 @@ def open_nldas_month(session, hours: pd.DatetimeIndex, n_workers: int = 8) -> tu
 
 OUT_VARS = [
     'Rainf', 'Tair', 'Tair_min', 'Tair_max', 'Qair', 'PSurf',
-    'SWdown', 'LWdown', 'Wind_E', 'Wind_N', 'SNOW_wetbulb', 'RAIN_wetbulb',
+    'SWdown', 'LWdown', 'Wind_E', 'Wind_N', 'Tw', 'SNOW_wetbulb', 'RAIN_wetbulb',
 ]
 
 
@@ -148,7 +149,7 @@ def precip_phase(rainf, tair_K, qair, psurf_Pa):
              + 0.00391838 * RH ** 1.5 * np.arctan(0.023101 * RH)
              - 4.686035)
     P_snow = 1.0 / (1.0 + 6.99e-5 * np.exp(2.0 * (Tw + 3.97)))
-    return (rainf * P_snow).astype(np.float32), (rainf * (1.0 - P_snow)).astype(np.float32)
+    return (rainf * P_snow).astype(np.float32), (rainf * (1.0 - P_snow)).astype(np.float32), (Tw + 273.15).astype(np.float32)
 
 
 def build_weight_matrix(hrus, lat: np.ndarray, lon: np.ndarray):
@@ -222,9 +223,11 @@ def aggregate_daily(ds_hourly: xr.Dataset, lat_desc: bool, S: csr_matrix,
     tair_hr  = ds_hourly['Tair'].values.astype(np.float32)
     qair_hr  = ds_hourly['Qair'].values.astype(np.float32)
     psurf_hr = ds_hourly['PSurf'].values.astype(np.float32)
-    snow_hr, rain_hr = precip_phase(rainf_hr, tair_hr, qair_hr, psurf_hr)
+    snow_hr, rain_hr, tw_hr = precip_phase(rainf_hr, tair_hr, qair_hr, psurf_hr)
 
     ds_ext = ds_hourly.assign({
+        'Tw':           xr.DataArray(tw_hr,   dims=ds_hourly['Tair'].dims,
+                                     coords=ds_hourly['Tair'].coords),
         'SNOW_wetbulb': xr.DataArray(snow_hr, dims=ds_hourly['Rainf'].dims,
                                      coords=ds_hourly['Rainf'].coords),
         'RAIN_wetbulb': xr.DataArray(rain_hr, dims=ds_hourly['Rainf'].dims,
@@ -243,6 +246,7 @@ def aggregate_daily(ds_hourly: xr.Dataset, lat_desc: bool, S: csr_matrix,
 
     daily = xr.merge([
         ds_ext[['Rainf', 'SNOW_wetbulb', 'RAIN_wetbulb']].resample(time='1D').sum(min_count=1),
+        ds_ext[['Tw']].resample(time='1D').mean(),
         ds_hourly[['Qair', 'PSurf', 'SWdown', 'LWdown', 'Wind_E', 'Wind_N']].resample(time='1D').mean(),
         ds_hourly[['Tair']].resample(time='1D').mean(),
         ds_hourly[['Tair']].resample(time='1D').min().rename({'Tair': 'Tair_min'}),
@@ -267,6 +271,7 @@ def aggregate_daily(ds_hourly: xr.Dataset, lat_desc: bool, S: csr_matrix,
         'LWdown':       zonal_means(flip(daily['LWdown'].values.astype(np.float32)),        S),
         'Wind_E':       zonal_means(flip(daily['Wind_E'].values.astype(np.float32)),        S),
         'Wind_N':       zonal_means(flip(daily['Wind_N'].values.astype(np.float32)),        S),
+        'Tw':           zonal_means(flip(daily['Tw'].values.astype(np.float32)),              S),
         'SNOW_wetbulb': zonal_means(flip(daily['SNOW_wetbulb'].values.astype(np.float32)), S) * scale[:, np.newaxis],
         'RAIN_wetbulb': zonal_means(flip(daily['RAIN_wetbulb'].values.astype(np.float32)), S) * scale[:, np.newaxis],
     }

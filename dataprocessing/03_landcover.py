@@ -1,7 +1,7 @@
 """
 Compute land cover static attributes per HRU from NLCD.
 
-Data source: NLCD 2021 via pygeohydro (web service)
+Data source: NLCD 2021 local raster (preferred) or MRLC WMS fallback
 Output: model_domain_{name}/landcover.parquet
 
 Attributes computed:
@@ -11,10 +11,16 @@ Attributes computed:
     impervious_fraction - class 21-24 (developed)
     dom_nlcd_class     - modal NLCD class
 
-Requires: pip install pygeohydro exactextract
+Download NLCD 2021 CONUS raster once:
+    wget -P /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/NLCD/ \
+        https://www.mrlc.gov/downloads/sciweb1/shared/mrlc/data-bundles/Annual_NLCD_LndCov_2021_CU_C1V1.zip
+    unzip -d /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/NLCD/ \
+        /uufs/chpc.utah.edu/common/home/civil-group1/Golitzin/SWEMLv3.0/NLCD/NLCD_2021_Land_Cover_L48_20230630.zip
+
+Requires: pip install pygeohydro exactextract rioxarray
 
 Usage:
-    python landcover.py --domain sierra_nevada
+    python landcover.py --domain sierra_nevada --nlcd-file /path/to/NLCD_2021_Land_Cover_L48_20230630.img
     python landcover.py --domain sierra_nevada --year 2019
 """
 import argparse
@@ -22,7 +28,10 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
+import rioxarray
+from pyproj import Transformer
 from shapely.geometry import box
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from domain_utils import domain_dir, load_hrus, domain_bbox
 
 # NLCD class groups
@@ -32,18 +41,39 @@ GRASS_CLASSES     = [71]
 DEVELOPED_CLASSES = [21, 22, 23, 24]
 
 
-def fetch_nlcd(bbox: tuple, year: int = 2021) -> xr.DataArray:
-    try:
-        from pygeohydro import nlcd_bygeom
-    except ImportError:
-        raise ImportError('pygeohydro required. Install with: pip install pygeohydro')
+def _fetch_nlcd_local(nlcd_file: str, bbox: tuple) -> xr.DataArray:
+    # bbox is (lon_min, lat_min, lon_max, lat_max) in EPSG:4326
+    # open lazily first to read the raster's native CRS, then transform bbox into it.
+    # all 4 corners are needed — in Albers the projected bbox of a geographic rectangle
+    # is not defined by the SW/NE corners alone (NW gives y_max for WUS domains).
+    da = rioxarray.open_rasterio(nlcd_file, chunks='auto').squeeze()
+    t = Transformer.from_crs('EPSG:4326', da.rio.crs, always_xy=True)
+    lon_min, lat_min, lon_max, lat_max = bbox
+    xs, ys = t.transform([lon_min, lon_min, lon_max, lon_max],
+                         [lat_min, lat_max, lat_min, lat_max])
+    return da.rio.clip_box(min(xs), min(ys), max(xs), max(ys)).compute()
+
+
+@retry(stop=stop_after_attempt(5),
+       wait=wait_exponential(multiplier=30, min=30, max=300),
+       retry=retry_if_exception_type(Exception))
+def _fetch_nlcd_wms(bbox: tuple, year: int) -> xr.DataArray:
+    from pygeohydro import nlcd_bygeom
     import warnings
     lon_min, lat_min, lon_max, lat_max = bbox
-    gs = gpd.GeoSeries([box(lon_min, lat_min, lon_max, lat_max)], crs='EPSG:4326')
+    gs = gpd.GeoSeries([box(lon_min, lat_min, lon_max, lat_max)], crs='epsg:4326')
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', category=FutureWarning, module='pygeoutils')
-        ds = nlcd_bygeom(gs, resolution=30, years={'cover': [year]})[0]
+        ds = nlcd_bygeom(gs, resolution=30, years={'cover': [year]}, crs='epsg:3857')[0]
     return ds[f'cover_{year}']
+
+
+def fetch_nlcd(bbox: tuple, year: int = 2021, nlcd_file: str = None) -> xr.DataArray:
+    if nlcd_file:
+        print(f'Reading NLCD from local file: {nlcd_file}')
+        return _fetch_nlcd_local(nlcd_file, bbox)
+    print('Fetching NLCD from MRLC WMS (use --nlcd-file to avoid timeouts on large domains)...')
+    return _fetch_nlcd_wms(bbox, year)
 
 
 def class_fraction(nlcd: xr.DataArray, hrus: gpd.GeoDataFrame,
@@ -70,6 +100,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--domain', required=True)
     ap.add_argument('--year', type=int, default=2021, choices=[2016, 2019, 2021])
+    ap.add_argument('--nlcd-file', default=None,
+                    help='Path to local NLCD CONUS raster (avoids unreliable MRLC WMS)')
     ap.add_argument('--overwrite', action='store_true')
     args = ap.parse_args()
 
@@ -81,8 +113,7 @@ def main():
     hrus = load_hrus(args.domain)
     bbox = domain_bbox(hrus)
 
-    print(f'Fetching NLCD {args.year} at 30m...')
-    nlcd = fetch_nlcd(bbox, args.year)
+    nlcd = fetch_nlcd(bbox, args.year, args.nlcd_file)
 
     print('Computing land cover fractions...')
     fracs = [

@@ -12,10 +12,10 @@ Input variables (hourly):
     tp     total precipitation (m, cumulative from 00:00 UTC)
     sf     snowfall (m water equiv, cumulative from 00:00 UTC)
     sp     surface pressure (Pa)
-    u10    10-m zonal wind (m/s)
-    v10    10-m meridional wind (m/s)
+    # u10    10-m zonal wind (m/s)
+    # v10    10-m meridional wind (m/s)
     ssrd   surface solar radiation downwards (J/m2, cumulative from 00:00 UTC)
-    strd   surface thermal radiation downwards (J/m2, cumulative from 00:00 UTC)
+    # strd   surface thermal radiation downwards (J/m2, cumulative from 00:00 UTC)
 
 Daily aggregation:
     tp, sf   summed and converted to mm/day
@@ -25,7 +25,8 @@ Daily aggregation:
 
 Derived:
     sf_frac      = daily sf / tp (ERA5-Land model phase diagnostic, analogous to HRRR cpofp)
-    SNOW_wetbulb = tp * P_snow via Wang (2019) on Stull (2011) Tw from t2m + d2m
+    Tw           = wet-bulb temperature (K), Stull (2011) from hourly t2m + d2m; Bolton (1980) RH
+    SNOW_wetbulb = tp * P_snow via Wang (2019) on Stull (2011) Tw
     RAIN_wetbulb = tp * (1 - P_snow)
 
 Output: model_domain_{name}/era5land.zarr  (time, divide_id)
@@ -33,6 +34,8 @@ Output: model_domain_{name}/era5land.zarr  (time, divide_id)
 Usage:
     python 04_extract_era5land.py --domain aso
     python 04_extract_era5land.py --domain aso --wy_start 2015 --wy_end 2021
+    python 04_extract_era5land.py --domain aso --resume --wy_end 2025
+    python 04_extract_era5land.py --domain aso --resume_from 2020 --wy_end 2025
 """
 import argparse
 import os
@@ -45,34 +48,34 @@ import xarray as xr
 from scipy.sparse import csr_matrix
 from domain_utils import domain_dir, load_hrus, domain_bbox
 
-# Grouped to 3 variables per CDS request (1 var/request = 9 requests/month;
-# 3 vars/request = 3 requests/month, ~3x faster without hitting the field limit).
+# Grouped to 3 variables per CDS request (1 var/request = 9 requests/month).
 CDS_VAR_GROUPS = [
     ['2m_temperature', '2m_dewpoint_temperature', 'surface_pressure'],
     ['total_precipitation', 'snowfall', 'surface_solar_radiation_downwards'],
-    ['surface_thermal_radiation_downwards',
-     '10m_u_component_of_wind', '10m_v_component_of_wind'],
+    # ['surface_thermal_radiation_downwards',
+    #  '10m_u_component_of_wind', '10m_v_component_of_wind'],
 ]
 OUT_VARS = [
     'tp', 'sf_frac', 'SNOW_wetbulb', 'RAIN_wetbulb',
-    't2m', 't2m_min', 't2m_max', 'd2m',
-    'sp', 'u10', 'v10', 'ssrd', 'strd',
+    't2m', 't2m_min', 't2m_max', 'd2m', 'Tw',
+    'sp', 
+    # 'u10', 'v10', 
+    'ssrd', 
+    # 'strd',
 ]
 
 
 def precip_phase(tp_mm, t2m_K, d2m_K):
     """
     Phase-partition precip using Wang (2019) sigmoid on Stull (2011) Tw.
-    Tw derived from daily-mean 2m temperature and dewpoint via Magnus formula.
+    RH derived from t2m/d2m via Bolton (1980) saturation vapor pressure.
     Returns (snow, rain) float32 in mm.
     """
     T_C  = t2m_K - 273.15
     Td_C = d2m_K - 273.15
-    RH   = np.clip(
-        100.0 * np.exp(17.625 * Td_C / (243.04 + Td_C))
-              / np.exp(17.625 * T_C  / (243.04 + T_C)),
-        0.0, 100.0,
-    )
+    es   = 6.112 * np.exp(17.67 * T_C  / (T_C  + 243.5))
+    ed   = 6.112 * np.exp(17.67 * Td_C / (Td_C + 243.5))
+    RH   = np.clip(ed / es * 100.0, 0.0, 100.0)
     Tw = (T_C * np.arctan(0.151977 * (RH + 8.313659) ** 0.5)
           + np.arctan(T_C + RH)
           - np.arctan(RH - 1.676331)
@@ -199,23 +202,38 @@ def aggregate_daily(ds_hourly: xr.Dataset, lat_desc: bool, S: csr_matrix) -> dic
     tp_hr   = ds_hourly['tp'].diff(dim='time').clip(min=0)
     sf_hr   = ds_hourly['sf'].diff(dim='time').clip(min=0)
     ssrd_hr = ds_hourly['ssrd'].diff(dim='time').clip(min=0)
-    strd_hr = ds_hourly['strd'].diff(dim='time').clip(min=0)
+    # strd_hr = ds_hourly['strd'].diff(dim='time').clip(min=0)
 
     # phase partition at hourly resolution using instantaneous t2m/d2m
     t2m_hr = ds_hourly['t2m'].sel(time=tp_hr.time)
     d2m_hr = ds_hourly['d2m'].sel(time=tp_hr.time)
     snow_hr, rain_hr = precip_phase(tp_hr * 1000.0, t2m_hr, d2m_hr)
 
+    # Tw from all 24h t2m/d2m via Bolton (1980) + Stull (2011)
+    T_C_all  = ds_hourly['t2m'] - 273.15
+    Td_C_all = ds_hourly['d2m'] - 273.15
+    es_all   = 6.112 * np.exp(17.67 * T_C_all  / (T_C_all  + 243.5))
+    ed_all   = 6.112 * np.exp(17.67 * Td_C_all / (Td_C_all + 243.5))
+    RH_all   = np.clip(ed_all / es_all * 100.0, 0.0, 100.0)
+    tw_all   = (T_C_all * np.arctan(0.151977 * (RH_all + 8.313659) ** 0.5)
+                + np.arctan(T_C_all + RH_all)
+                - np.arctan(RH_all - 1.676331)
+                + 0.00391838 * RH_all ** 1.5 * np.arctan(0.023101 * RH_all)
+                - 4.686035 + 273.15)  # K
+
     # daily aggregation
     daily = xr.merge([
-        xr.Dataset({'tp': tp_hr, 'sf': sf_hr, 'ssrd': ssrd_hr, 'strd': strd_hr,
+        xr.Dataset({'tp': tp_hr, 'sf': sf_hr, 
+                    'ssrd': ssrd_hr, 
+                    # 'strd': strd_hr,
                     'SNOW_wetbulb': snow_hr, 'RAIN_wetbulb': rain_hr,
                     }).resample(time='1D').sum(min_count=1),
         ds_hourly[['t2m']].resample(time='1D').mean(),
         ds_hourly[['t2m']].resample(time='1D').min().rename({'t2m': 't2m_min'}),
         ds_hourly[['t2m']].resample(time='1D').max().rename({'t2m': 't2m_max'}),
         ds_hourly[['d2m']].resample(time='1D').mean(),
-        ds_hourly[['sp', 'u10', 'v10']].resample(time='1D').mean(),
+        ds_hourly[['sp']].resample(time='1D').mean(),  #, 'u10', 'v10'
+        xr.Dataset({'Tw': tw_all}).resample(time='1D').mean(),
     ]).load()
 
     def flip(arr):
@@ -239,30 +257,74 @@ def aggregate_daily(ds_hourly: xr.Dataset, lat_desc: bool, S: csr_matrix) -> dic
         't2m_min':      zonal_means(flip(daily['t2m_min'].values.astype(np.float32)), S),
         't2m_max':      zonal_means(flip(daily['t2m_max'].values.astype(np.float32)), S),
         'd2m':          zonal_means(flip(daily['d2m'].values.astype(np.float32)),     S),
+        'Tw':           zonal_means(flip(daily['Tw'].values.astype(np.float32)),      S),
         'sp':           zonal_means(flip(daily['sp'].values.astype(np.float32)),      S),
-        'u10':          zonal_means(flip(daily['u10'].values.astype(np.float32)),     S),
-        'v10':          zonal_means(flip(daily['v10'].values.astype(np.float32)),     S),
+        # 'u10':          zonal_means(flip(daily['u10'].values.astype(np.float32)),     S),
+        # 'v10':          zonal_means(flip(daily['v10'].values.astype(np.float32)),     S),
         'ssrd':         zonal_means(flip(daily['ssrd'].values.astype(np.float32)),    S),
-        'strd':         zonal_means(flip(daily['strd'].values.astype(np.float32)),    S),
+        # 'strd':         zonal_means(flip(daily['strd'].values.astype(np.float32)),    S),
         '_times':       daily.time.values,
     }
     return result
 
 
+def _truncate_zarr_before_wy(out_zarr, wy: int) -> bool:
+    """Rewrite out_zarr keeping only timesteps before the start of WY wy.
+    Returns True if any data remains; False if the zarr was removed entirely."""
+    cutoff = np.datetime64(pd.Timestamp(wy - 1, 10, 1))
+    print(f'Truncating era5land.zarr: keeping times before {pd.Timestamp(cutoff).date()}...')
+    ds = xr.open_zarr(out_zarr, consolidated=False).compute()
+    trimmed = ds.sel(time=ds.time < cutoff)
+    if len(trimmed.time) == 0:
+        print('  No data before that WY; will create fresh zarr.')
+        shutil.rmtree(out_zarr)
+        return False
+    tmp = out_zarr.parent / '_era5land_truncate_tmp.zarr'
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    trimmed.to_zarr(tmp, zarr_format=2)
+    shutil.rmtree(out_zarr)
+    tmp.rename(out_zarr)
+    print(f'  Kept {len(trimmed.time)} timesteps through {pd.Timestamp(trimmed.time.values[-1]).date()}')
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--domain',    required=True)
-    ap.add_argument('--wy_start',  type=int, default=2015)
-    ap.add_argument('--wy_end',    type=int, default=2021)
-    ap.add_argument('--overwrite', action='store_true')
-    ap.add_argument('--cds_key',   default=None,
+    ap.add_argument('--domain',      required=True)
+    ap.add_argument('--wy_start',    type=int, default=2015)
+    ap.add_argument('--wy_end',      type=int, default=2021)
+    ap.add_argument('--overwrite',   action='store_true',
+                    help='delete existing era5land.zarr and reprocess all WYs')
+    ap.add_argument('--resume',      action='store_true',
+                    help='auto-detect last complete WY in zarr and append from the next one')
+    ap.add_argument('--resume_from', type=int, metavar='WY',
+                    help='truncate zarr to before WY start, then reprocess from that WY')
+    ap.add_argument('--cds_key',     default=None,
                     help='CDS API token; if omitted reads from ~/.cdsapirc')
     args = ap.parse_args()
 
-    out_zarr = domain_dir(args.domain) / 'era5land.zarr'
-    if out_zarr.exists() and not args.overwrite:
-        print('era5land.zarr already exists. Use --overwrite to redo.')
-        return
+    out_zarr    = domain_dir(args.domain) / 'era5land.zarr'
+    first_write = True
+
+    if out_zarr.exists():
+        if args.overwrite:
+            shutil.rmtree(out_zarr)
+        elif args.resume_from:
+            has_data = _truncate_zarr_before_wy(out_zarr, args.resume_from)
+            args.wy_start = args.resume_from
+            first_write = not has_data
+        elif args.resume:
+            ds_existing = xr.open_zarr(out_zarr, consolidated=False)
+            last_ts = pd.Timestamp(ds_existing.time.values[-1])
+            ds_existing.close()
+            last_wy = last_ts.year + 1 if last_ts.month >= 10 else last_ts.year
+            print(f'Resuming: last complete WY in zarr is WY{last_wy}, starting from WY{last_wy + 1}')
+            args.wy_start = last_wy + 1
+            first_write = False
+        else:
+            print('era5land.zarr already exists. Use --overwrite, --resume, or --resume_from WY.')
+            return
 
     # use SLURM allocation when available; cap at number of var groups (always 3)
     n_workers = min(len(CDS_VAR_GROUPS),
@@ -279,9 +341,8 @@ def main():
     c = (cdsapi.Client(url='https://cds.climate.copernicus.eu/api', key=args.cds_key)
          if args.cds_key else cdsapi.Client())
 
-    S           = None
-    hru_ids     = None
-    first_write = True
+    S       = None
+    hru_ids = None
 
     for wy in range(args.wy_start, args.wy_end + 1):
         wy_start = pd.Timestamp(wy - 1, 10, 1)
@@ -336,8 +397,6 @@ def main():
         wy_ds = xr.Dataset(data_vars, coords={'time': time_arr, 'divide_id': hru_ids})
 
         if first_write:
-            if out_zarr.exists():
-                shutil.rmtree(out_zarr)
             wy_ds.to_zarr(out_zarr, zarr_format=2)
             first_write = False
         else:

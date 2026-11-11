@@ -5,6 +5,9 @@ Data source: base_loc/PRISM/800m/{WY}.zarr
     dims: (time, lat, lon), EPSG:4326
     variables: ppt, tmean, tmax, tmin, tdmean, vpdmin, vpdmax
 
+Derived:
+    Tw = wet-bulb temperature (K), Stull (2011) from daily-mean tmean + Magnus RH
+
 Output: model_domain_{name}/prism.zarr  (time, divide_id)
 
 Usage:
@@ -20,6 +23,7 @@ from domain_utils import domain_dir, load_hrus, domain_bbox, BASE_LOC
 
 PRISM_DIR  = BASE_LOC / 'PRISM' / '800m'
 PRISM_VARS = ['ppt', 'tmean', 'tmax', 'tmin', 'tdmean', 'vpdmin', 'vpdmax']
+OUT_VARS   = PRISM_VARS + ['Tw']
 
 
 def rasterize_hrus(hrus, lat: np.ndarray, lon: np.ndarray):
@@ -94,7 +98,7 @@ def main():
 
     S       = None
     hru_ids = None
-    accum   = {v: [] for v in PRISM_VARS}
+    accum   = {v: [] for v in OUT_VARS}
     times   = []
 
     for wy in range(args.wy_start, args.wy_end + 1):
@@ -121,6 +125,19 @@ def main():
             data = ds[var].values.astype(np.float32)  # (n_time, n_lat, n_lon)
             accum[var].append(zonal_means(data, S))
 
+        # Tw from daily-mean T and Bolton (1980) RH (tmean, tdmean both °C for PRISM)
+        T_C  = ds['tmean'].values.astype(np.float32)
+        Td_C = ds['tdmean'].values.astype(np.float32)
+        es   = 6.112 * np.exp(17.67 * T_C  / (T_C  + 243.5))
+        ed   = 6.112 * np.exp(17.67 * Td_C / (Td_C + 243.5))
+        RH   = np.clip(ed / es * 100.0, 0.0, 100.0)
+        Tw = (T_C * np.arctan(0.151977 * (RH + 8.313659) ** 0.5)
+              + np.arctan(T_C + RH)
+              - np.arctan(RH - 1.676331)
+              + 0.00391838 * RH ** 1.5 * np.arctan(0.023101 * RH)
+              - 4.686035 + 273.15).astype(np.float32)  # K
+        accum['Tw'].append(zonal_means(Tw, S))
+
         ds.close()
 
     if not times:
@@ -130,7 +147,7 @@ def main():
     time_arr = np.concatenate(times)
     data_vars = {
         v: xr.DataArray(np.concatenate(accum[v], axis=0), dims=['time', 'divide_id'])
-        for v in PRISM_VARS
+        for v in OUT_VARS
     }
     out_ds = xr.Dataset(data_vars, coords={'time': time_arr, 'divide_id': hru_ids})
 

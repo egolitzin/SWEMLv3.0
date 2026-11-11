@@ -9,6 +9,7 @@ Input variables: pr, tmmx, tmmn, rmax, rmin, sph, vs, srad
 Derived:
     tmean        = (tmmx + tmmn) / 2
     rmean        = (rmax + rmin) / 2
+    Tw           = wet-bulb temperature (K), Stull (2011) from daily-mean T + RH
     SNOW_wetbulb = pr * P_snow via Wang (2019) on Stull (2011) Tw from tmean + rmean
     RAIN_wetbulb = pr * (1 - P_snow)
 
@@ -33,7 +34,7 @@ THREDDS_BASE = (
     '/thredds/dodsC/MET/{var}/{var}_{year}.nc'
 )
 GRIDMET_VARS = ['pr', 'tmmx', 'tmmn', 'rmax', 'rmin', 'sph', 'vs', 'srad']
-OUT_VARS     = GRIDMET_VARS + ['tmean', 'rmean', 'SNOW_wetbulb', 'RAIN_wetbulb']
+OUT_VARS     = GRIDMET_VARS + ['tmean', 'rmean', 'Tw', 'SNOW_wetbulb', 'RAIN_wetbulb']
 
 
 def precip_phase(pr, tmmx_K, tmmn_K, rmax_pct, rmin_pct):
@@ -50,7 +51,7 @@ def precip_phase(pr, tmmx_K, tmmn_K, rmax_pct, rmin_pct):
            + 0.00391838 * RH ** 1.5 * np.arctan(0.023101 * RH)
            - 4.686035)
     P_snow = 1.0 / (1.0 + 6.99e-5 * np.exp(2.0 * (Tw + 3.97)))
-    return (pr * P_snow).astype(np.float32), (pr * (1.0 - P_snow)).astype(np.float32)
+    return (pr * P_snow).astype(np.float32), (pr * (1.0 - P_snow)).astype(np.float32), (Tw + 273.15).astype(np.float32)
 
 
 def build_weight_matrix(hrus, lat: np.ndarray, lon: np.ndarray):
@@ -169,7 +170,7 @@ def process_month(ds_m: xr.Dataset, lat_desc: bool, S: csr_matrix) -> dict:
     rmax = get('rmax')
     rmin = get('rmin')
 
-    snow, rain = precip_phase(pr, tmmx, tmmn, rmax, rmin)
+    snow, rain, tw = precip_phase(pr, tmmx, tmmn, rmax, rmin)
     tmean = ((tmmx + tmmn) / 2.0).astype(np.float32)
     rmean = ((rmax + rmin) / 2.0).astype(np.float32)
 
@@ -180,6 +181,7 @@ def process_month(ds_m: xr.Dataset, lat_desc: bool, S: csr_matrix) -> dict:
         result[var] = zonal_means(arr, S)
     result['tmean']        = zonal_means(tmean, S)
     result['rmean']        = zonal_means(rmean, S)
+    result['Tw']           = zonal_means(tw,    S)
     result['SNOW_wetbulb'] = zonal_means(snow,  S)
     result['RAIN_wetbulb'] = zonal_means(rain,  S)
     result['_times']       = ds_m.time.values

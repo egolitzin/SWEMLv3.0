@@ -121,6 +121,25 @@ def main():
                         include_cols=['divide_id'], output='pandas')
     df = df.rename(columns={'mean': 'canopy_ndvi'})
 
+    n_nan = df['canopy_ndvi'].isna().sum()
+    if n_nan > 0:
+        # HRUs with all-NaN snow-season NDVI are persistently snow/cloud covered.
+        # Fall back to summer (Jul-Sep) mean as a canopy proxy for these HRUs.
+        print(f'  {n_nan} HRUs have no valid snow-season NDVI; falling back to Jul-Sep mean.')
+        summer_months = [7, 8, 9]
+        ndvi_summer = ndvi.sel(time=ndvi.time.dt.month.isin(summer_months))
+        ndvi_summer_mean = ndvi_summer.mean(dim='time', skipna=True).rio.write_crs('EPSG:4326')
+        df_summer = exact_extract(ndvi_summer_mean, hrus.to_crs('EPSG:4326'), ['mean'],
+                                  include_cols=['divide_id'], output='pandas')
+        df_summer = df_summer.rename(columns={'mean': 'canopy_ndvi'})
+        nan_ids = df.loc[df['canopy_ndvi'].isna(), 'divide_id']
+        df.loc[df['divide_id'].isin(nan_ids), 'canopy_ndvi'] = \
+            df_summer.loc[df_summer['divide_id'].isin(nan_ids), 'canopy_ndvi'].values
+        n_still_nan = df['canopy_ndvi'].isna().sum()
+        if n_still_nan > 0:
+            print(f'  {n_still_nan} HRUs still NaN after summer fallback; filling with 0.')
+            df['canopy_ndvi'] = df['canopy_ndvi'].fillna(0.0)
+
     df.to_parquet(out_file, index=False)
     print(f'Saved NDVI attrs for {len(df)} HRUs → {out_file}')
     print(df['canopy_ndvi'].describe().round(3).to_string())

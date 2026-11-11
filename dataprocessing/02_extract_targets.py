@@ -22,6 +22,7 @@ Usage:
     python extract_targets.py --domain sierra_nevada --wy_start 2014 --wy_end 2020
 """
 import argparse
+import re
 import shutil
 import numpy as np
 import pandas as pd
@@ -34,23 +35,15 @@ PPD      = 225       # pixels per degree in UCLA tiles
 STATS_I  = 0         # index 0 = posterior mean SWE
 
 # Snow filter thresholds
-MIN_SWE_MM    = 10.0
-MIN_SNOW_DAYS = 7
-MIN_SNOW_WYS  = 1
+MIN_SWE_MM    = 20.0
+MIN_SNOW_DAYS = 30
+MIN_SNOW_WYS  = 3
 
 
 # Tile utilities
 
-def tile_name(lat_s: int, lon_w: int, wy: int) -> str:
-    """Filename for tile covering water year wy.
-    """
-    yy = str(wy)[2:]   # last two digits of the ending year
-    return f'WUS_UCLA_SR_v01_N{lat_s}_0W{lon_w}_0_agg_16_WY{wy - 1}_{yy}_SWE_SCA_POST.nc'
-
-
 def _parse_tile_coord(fname: str) -> tuple[int, int, int] | None:
     """Parse (lat_s, lon_w, wy) from a UCLA SWE filename, or None if no match."""
-    import re
     m = re.search(r'N(\d+)_0W(\d+)_0_agg_16_WY(\d{4})_(\d{2})_', fname)
     if not m:
         return None
@@ -101,8 +94,9 @@ def tiles_for_bbox(bbox: tuple, wy: int) -> list[tuple[int, int, Path]]:
 
 
 def wy_dates(wy: int) -> pd.DatetimeIndex:
-    """365 daily dates for water year wy: Oct 1 of (wy-1) through Sep 30 of wy."""
-    return pd.date_range(pd.Timestamp(wy - 1, 10, 1), periods=365, freq='D')
+    """Daily dates for water year wy: Oct 1 of (wy-1) through Sep 30 of wy.
+    Returns 366 dates when the WY contains a leap day, 365 otherwise."""
+    return pd.date_range(pd.Timestamp(wy - 1, 10, 1), pd.Timestamp(wy, 9, 30), freq='D')
 
 
 # Mosaic grid and HRU rasterization
@@ -167,18 +161,19 @@ def rasterize_hrus(hrus, lat_coords: np.ndarray, lon_coords: np.ndarray
 def load_tile_swe(fpath: Path) -> np.ndarray:
     """
     Load SWE_Post[Stats=0] from one tile.
-    Returns float32 array shaped (365, PPD, PPD) with lat N-to-S, lon W-to-E.
+    Returns float32 array shaped (n_days, PPD, PPD) with lat N-to-S, lon W-to-E.
+    n_days is 365 or 366 depending on whether the water year contains a leap day.
     Fill values (< -9000) set to NaN.
     """
     ds  = xr.open_dataset(fpath)
-    swe = ds['SWE_Post'].isel(Stats=STATS_I).values  # (365, Longitude=225, Latitude=225)
+    swe = ds['SWE_Post'].isel(Stats=STATS_I).values  # (n_days, Longitude=225, Latitude=225)
     ds.close()
 
-    swe = swe.transpose(0, 2, 1).astype(np.float32)  # (365, Latitude, Longitude)
+    swe = swe.transpose(0, 2, 1).astype(np.float32)  # (n_days, Latitude, Longitude)
     # Latitude coordinate in file is N-to-S (32.0 -> 31.0), so row order is already correct.
     swe[swe < -9000] = np.nan
     swe *= 1000.0   # convert m -> mm
-    return swe  # (365, PPD, PPD)
+    return swe
 
 
 # Main extraction
@@ -242,21 +237,28 @@ def extract_swe(domain: str, wy_start: int, wy_end: int) -> xr.Dataset:
                   f'(HRUs in those cells will be NaN): '
                   + ', '.join(f'N{ls}_W{lw}' for ls, lw in sorted(missing_tiles)))
 
-        sums   = np.zeros((365, n_hrus), dtype=np.float64)
-        counts = np.zeros((365, n_hrus), dtype=np.float64)
+        n_days = len(wy_dates(wy))
+        sums   = np.zeros((n_days, n_hrus), dtype=np.float64)
+        counts = np.zeros((n_days, n_hrus), dtype=np.float64)
 
         for lat_s, lon_w, fpath in tiles:
+            if (lat_s, lon_w) not in expected_grid:
+                continue
             r0 = lat_s_to_row.get(lat_s)
             c0 = lon_w_to_col.get(lon_w)
             if r0 is None or c0 is None:
                 continue
 
-            tile_swe  = load_tile_swe(fpath)           # (365, PPD, PPD)
+            tile_swe  = load_tile_swe(fpath)           # (n_days, PPD, PPD)
+            if tile_swe.shape[0] != n_days:
+                print(f'    WARNING: {fpath.name} has {tile_swe.shape[0]} days, '
+                      f'expected {n_days} — skipping tile')
+                continue
             tile_mask = mask[r0:r0+PPD, c0:c0+PPD]    # (PPD, PPD)
             flat_mask = tile_mask.ravel()
             has_hru   = flat_mask > 0                  # (PPD*PPD,)
 
-            for day_i in range(365):
+            for day_i in range(n_days):
                 flat_swe = tile_swe[day_i].ravel()
                 valid    = has_hru & ~np.isnan(flat_swe)
                 if not valid.any():
@@ -274,6 +276,11 @@ def extract_swe(domain: str, wy_start: int, wy_end: int) -> xr.Dataset:
         all_swe.append(mean_swe)
         all_dates.append(wy_dates(wy).values)
 
+    if not all_swe:
+        raise RuntimeError(
+            f'No UCLA SWE data found for WY{wy_start}–{wy_end}. '
+            'Check that tiles exist in UCLA_DIR and wy_start/wy_end are correct.'
+        )
     all_data  = np.concatenate(all_swe,   axis=0)  # (total_days, n_hrus)
     all_times = np.concatenate(all_dates, axis=0)
 
@@ -304,7 +311,7 @@ def filter_snow_hrus(ds: xr.Dataset) -> list[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--domain',   required=True)
-    ap.add_argument('--wy_start', type=int, default=2015)
+    ap.add_argument('--wy_start', type=int, default=2000)
     ap.add_argument('--wy_end',   type=int, default=2021)
     ap.add_argument('--overwrite', action='store_true')
     args = ap.parse_args()
@@ -326,7 +333,7 @@ def main():
     print(f'Saving targets.zarr ({n_days} days x {n_hrus} HRUs)...')
     if out_zarr.exists():
         shutil.rmtree(out_zarr)
-    ds.to_zarr(out_zarr)
+    ds.to_zarr(out_zarr, zarr_format=2)
 
     print('Filtering HRUs by snow presence...')
     snow_ids = filter_snow_hrus(ds)
@@ -346,7 +353,7 @@ def main():
     # Trim targets.zarr to snow HRUs only
     ds_snow = ds.sel(divide_id=snow_ids)
     shutil.rmtree(out_zarr)
-    ds_snow.to_zarr(out_zarr)
+    ds_snow.to_zarr(out_zarr, zarr_format=2)
     print(f'  Trimmed targets.zarr to {n_snow} snow HRUs')
 
     t0   = str(ds.time.values[0])[:10]
